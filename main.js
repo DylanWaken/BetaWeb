@@ -604,7 +604,6 @@ function createWorker(self) {
             texdata_c[(TOTAL_SIZE * i + 7) * 4 + 1] = u_buffer[(IN_BUFFER_SPLAT_SIZE * i + 10) * 4 + 1];  // G
             texdata_c[(TOTAL_SIZE * i + 7) * 4 + 2] = u_buffer[(IN_BUFFER_SPLAT_SIZE * i + 10) * 4 + 2];  // B
             texdata_c[(TOTAL_SIZE * i + 7) * 4 + 3] = u_buffer[(IN_BUFFER_SPLAT_SIZE * i + 10) * 4 + 3];  // A
-
             
             // THIRD TEXEL: Theta, Phi, Beta Param, RGBA Color (uint8 × 4)
             texdata_f[TOTAL_SIZE * i + 8] = f_buffer[IN_BUFFER_SPLAT_SIZE * i + 12];  // Theta
@@ -827,32 +826,37 @@ function createWorker(self) {
         sizeIndex.sort((b, a) => sizeList[a] - sizeList[b]);
         console.timeEnd("sort");
 
-        // STEP 6: BUILD OUTPUT BUFFER IN .SPLAT FORMAT
-        // Convert sorted PLY data to efficient 32-byte-per-splat format
-        const rowLength = 3 * 4 + 3 * 4 + 4 + 4;  // 32 bytes total
+        // STEP 6: BUILD OUTPUT BUFFER IN NEW FORMAT
+        // Convert sorted PLY data to 20-element format (80 bytes per splat)
+        const rowLength = 20 * 4;  // 80 bytes total (20 × 4 bytes)
         const buffer = new ArrayBuffer(rowLength * vertexCount);
 
         console.time("build buffer");
         for (let j = 0; j < vertexCount; j++) {
             row = sizeIndex[j];  // Process in importance order
 
-            // Create views for different data types within this splat's 32 bytes
-            const position = new Float32Array(buffer, j * rowLength, 3);
-            const scales = new Float32Array(buffer, j * rowLength + 4 * 3, 3);
-            const rgba = new Uint8ClampedArray(
-                buffer,
-                j * rowLength + 4 * 3 + 4 * 3,
-                4,
-            );
-            const rot = new Uint8ClampedArray(
-                buffer,
-                j * rowLength + 4 * 3 + 4 * 3 + 4,
-                4,
-            );
+            // Create views for different sections of the 80-byte splat data
+            const position = new Float32Array(buffer, j * rowLength, 3);      // [0-2]: XYZ
+            const beta = new Float32Array(buffer, j * rowLength + 12, 1);     // [3]: Beta Parameter
+            const scales = new Float32Array(buffer, j * rowLength + 16, 3);   // [4-6]: Scale XYZ
+            const rotation = new Float32Array(buffer, j * rowLength + 28, 4); // [7-10]: Quaternion
+            const baseColor = new Uint32Array(buffer, j * rowLength + 44, 1); // [11]: RGBA Color
+            const sb1GeoData = new Float32Array(buffer, j * rowLength + 48, 3);  // [12-14]: SB1 data
+            const sb1ColorData = new Uint32Array(buffer, j * rowLength + 60, 1);  // [15]: SB1 color
+            const sb2GeoData = new Float32Array(buffer, j * rowLength + 64, 3);  // [16-18]: SB2 data
+            const sb2ColorData = new Uint32Array(buffer, j * rowLength + 76, 1);  // [19]: SB2 color
+
+            // COPY POSITION DATA
+            position[0] = attrs.x;
+            position[1] = attrs.y;
+            position[2] = attrs.z;
+
+            // COPY BETA PARAMETER
+            beta[0] = attrs.beta;
 
             // HANDLE SCALE AND ROTATION DATA
             if (types["scale_0"]) {
-                // Normalize quaternion and pack to uint8 [0,255]
+                // Normalize quaternion and store as float
                 const qlen = Math.sqrt(
                     attrs.rot_0 ** 2 +
                         attrs.rot_1 ** 2 +
@@ -860,10 +864,10 @@ function createWorker(self) {
                         attrs.rot_3 ** 2,
                 );
 
-                rot[0] = (attrs.rot_0 / qlen) * 128 + 128;  // Normalized quaternion
-                rot[1] = (attrs.rot_1 / qlen) * 128 + 128;  // mapped to [0,255]
-                rot[2] = (attrs.rot_2 / qlen) * 128 + 128;
-                rot[3] = (attrs.rot_3 / qlen) * 128 + 128;
+                rotation[0] = attrs.rot_0 / qlen;  // Normalized quaternion as float
+                rotation[1] = attrs.rot_1 / qlen;
+                rotation[2] = attrs.rot_2 / qlen;
+                rotation[3] = attrs.rot_3 / qlen;
 
                 // Convert log-space scales to linear
                 scales[0] = Math.exp(attrs.scale_0);
@@ -875,43 +879,64 @@ function createWorker(self) {
                 scales[1] = 0.01;
                 scales[2] = 0.01;
 
-                rot[0] = 255;  // Identity quaternion
-                rot[1] = 0;
-                rot[2] = 0;
-                rot[3] = 0;
+                rotation[0] = 1.0;  // Identity quaternion
+                rotation[1] = 0.0;
+                rotation[2] = 0.0;
+                rotation[3] = 0.0;
             }
 
-            // COPY POSITION DATA
-            position[0] = attrs.x;
-            position[1] = attrs.y;
-            position[2] = attrs.z;
-
             // STEP 7: SPHERICAL HARMONICS TO RGB CONVERSION
-            // THIS IS WHERE SPHERICAL HARMONICS ARE EVALUATED!
-            if (types["f_dc_0"]) {
+            // Convert spherical harmonic coefficients to base color
+            let r, g, b, a;
+            if (types["sh0_0"]) {
                 // Convert spherical harmonic coefficients to RGB
-                // f_dc_* are the DC (0th order) SH coefficients
                 const SH_C0 = 0.28209479177387814;  // Normalization constant for SH basis function Y₀⁰
                 
                 // Evaluate SH at view direction (simplified to DC term only)
-                // Full SH evaluation would include higher-order terms and view direction
-                rgba[0] = (0.5 + SH_C0 * attrs.f_dc_0) * 255;  // Red channel
-                rgba[1] = (0.5 + SH_C0 * attrs.f_dc_1) * 255;  // Green channel  
-                rgba[2] = (0.5 + SH_C0 * attrs.f_dc_2) * 255;  // Blue channel
+                r = Math.max(0, Math.min(255, (0.5 + SH_C0 * attrs.sh0_0) * 255));
+                g = Math.max(0, Math.min(255, (0.5 + SH_C0 * attrs.sh0_1) * 255));
+                b = Math.max(0, Math.min(255, (0.5 + SH_C0 * attrs.sh0_2) * 255));
             } else {
-                // Direct RGB colors (no spherical harmonics)
-                rgba[0] = attrs.red;
-                rgba[1] = attrs.green;
-                rgba[2] = attrs.blue;
+                // Default RGB if no SH data
+                r = 128;
+                g = 128;
+                b = 128;
             }
             
             // HANDLE OPACITY
             if (types["opacity"]) {
                 // Convert opacity logit to [0,1] range then to [0,255]
-                rgba[3] = (1 / (1 + Math.exp(-attrs.opacity))) * 255;
+                a = Math.max(0, Math.min(255, (1 / (1 + Math.exp(-attrs.opacity))) * 255));
             } else {
-                rgba[3] = 255;  // Fully opaque
+                a = 255;  // Fully opaque
             }
+
+            // Pack RGBA into uint32
+            baseColor[0] = (a << 24) | (b << 16) | (g << 8) | r;
+
+            // STEP 8: PACK SPHERICAL BETA PARAMETERS
+            // SB1 data: Theta, Phi, Beta, RGBA
+            sb1GeoData[0] = attrs.sb_params_0;  // Theta
+            sb1GeoData[1] = attrs.sb_params_1;  // Phi
+            sb1GeoData[2] = attrs.sb_params_2;  // Beta
+
+            // Convert float spherical beta parameters to uint8 for efficient packing
+            let sb1_r = Math.max(0, Math.min(255, Math.floor(attrs.sb_params_3 * 255)));  // Convert float to uint8
+            let sb1_g = Math.max(0, Math.min(255, Math.floor(attrs.sb_params_4 * 255)));  // Convert float to uint8  
+            let sb1_b = Math.max(0, Math.min(255, Math.floor(attrs.sb_params_5 * 255)));  // Convert float to uint8
+            
+            let sb2_r = Math.max(0, Math.min(255, Math.floor(attrs.sb_params_9 * 255)));  // Convert float to uint8
+            let sb2_g = Math.max(0, Math.min(255, Math.floor(attrs.sb_params_10 * 255))); // Convert float to uint8
+            let sb2_b = Math.max(0, Math.min(255, Math.floor(attrs.sb_params_11 * 255))); // Convert float to uint8
+
+            sb1ColorData[0] = (sb1_r << 24) | (sb1_g << 16) | (sb1_b << 8) | 0xFF; // RGBA packed
+
+            // SB2 data: Theta, Phi, Beta, RGBA
+            sb2GeoData[0] = attrs.sb_params_6;  // Theta
+            sb2GeoData[1] = attrs.sb_params_7;  // Phi
+            sb2GeoData[2] = attrs.sb_params_8;  // Beta
+
+            sb2ColorData[0] = (sb2_r << 24) | (sb2_g << 16) | (sb2_b << 8) | 0xFF; // RGBA packed
         }
         console.timeEnd("build buffer");
         return buffer;
@@ -976,6 +1001,7 @@ uniform highp usampler2D u_texture;  // Packed splat data texture
 uniform mat4 projection, view;       // Camera matrices
 uniform vec2 focal;                  // Camera focal lengths (fx, fy)
 uniform vec2 viewport;               // Screen dimensions
+uniform vec3 cameraPos;              // Camera position
 
 // INPUTS: Per-vertex attributes  
 in vec2 position;  // Quad vertex position [-2,-2] to [2,2]
@@ -984,15 +1010,121 @@ in int index;      // Splat index (which Gaussian we're rendering)
 // OUTPUTS: Data passed to fragment shader
 out vec4 vColor;    // Splat color and depth-based alpha
 out vec2 vPosition; // Position within quad for Gaussian evaluation
+out float vBeta;    // Beta parameter
 
-void main () {
-    // STEP 1: FETCH SPLAT DATA FROM TEXTURE
-    // Each splat occupies 2 consecutive texels horizontally
-    uvec4 cen = texelFetch(u_texture, ivec2((uint(index) & 0x3ffu) << 1, uint(index) >> 10), 0);
+// Helper function to convert spherical coordinates to cartesian
+vec3 sphericalToCartesian(float theta, float phi) {
+    return vec3(
+        sin(theta) * cos(phi),
+        sin(theta) * sin(phi),
+        cos(theta)
+    );
+}
+
+// Helper function to compute spherical gaussian contribution
+vec3 computeSphericalBeta(vec3 dir, vec3 meanDir, float beta, vec3 color) {
+    // Normalize direction vector
+    float dirNorm = length(dir);
+    vec3 dirNormalized = dir / dirNorm;
     
-    // STEP 2: PROJECT 3D POSITION TO CAMERA SPACE
-    vec4 cam = view * vec4(uintBitsToFloat(cen.xyz), 1);  // Transform to camera space
-    vec4 pos2d = projection * cam;                        // Project to clip space
+    // Compute dot product between normalized direction and mean direction
+    float dot = dot(dirNormalized, meanDir);
+    
+    // Compute beta term - only contribute if dot product is positive
+    float betaTerm = 0.0;
+    if (dot > 0.0) {
+        betaTerm = pow(dot, 4.0 * exp(beta));
+    }
+    
+    // Return color contribution
+    return betaTerm * color;
+}
+
+// Main spherical gaussian evaluation function
+vec3 evaluateSphericalBeta(vec3 dir, vec3 baseColor, vec3 SB1Geo, vec4 SB1Color, vec3 SB2Geo, vec4 SB2Color) {
+    // Start with base color
+    vec3 result = baseColor;
+    
+    // Convert spherical coordinates to cartesian for first spherical gaussian
+    vec3 meanDir1 = sphericalToCartesian(SB1Geo.x, SB1Geo.y);
+    result += computeSphericalGaussian(dir, meanDir1, SB1Geo.z, SB1Color.rgb);
+    
+    // Convert spherical coordinates to cartesian for second spherical gaussian
+    vec3 meanDir2 = sphericalToCartesian(SB2Geo.x, SB2Geo.y);
+    result += computeSphericalGaussian(dir, meanDir2, SB2Geo.z, SB2Color.rgb);
+    
+    return result;
+}
+
+
+
+// MAIN FUNCTION
+void main () {
+    // Each splat occupies 4 consecutive texels horizontally
+    int texelsPerSplat = 4;
+    int NumSplatsPerRow = 1024;  // Maximum texels per row
+    int splatX = (index % NumSplatsPerRow) * texelsPerSplat;
+    int splatY = index / NumSplatsPerRow;
+    
+    // ------------------------------------------------------------
+    // 1Fetch splat data from texture
+    // ------------------------------------------------------------
+
+    // TEXEL 0: Position (XYZ) + Beta Parameter
+    // TEXEL 1: Covariance Matrix (6 values packed as 3 half2 pairs) + Base Color (RGBA)
+    // TEXEL 2: Theta, Phi, Beta Param, RGBA Color (uint8 × 4)
+    // TEXEL 3: Theta, Phi, Beta Param, RGBA Color (uint8 × 4)
+    uvec4 texel0 = texelFetch(u_texture, ivec2(splatX, splatY), 0);
+    uvec4 texel1 = texelFetch(u_texture, ivec2(splatX + 1, splatY), 0);
+    uvec4 texel2 = texelFetch(u_texture, ivec2(splatX + 2, splatY), 0);
+    uvec4 texel3 = texelFetch(u_texture, ivec2(splatX + 3, splatY), 0);
+
+    vec3 pos = uintBitsToFloat(texel0.xyz);
+    float beta = uintBitsToFloat(texel0.w);
+
+    // Unpack 6 covariance values from 3×32-bit integers
+    vec2 u1 = unpackHalf2x16(texel1.x), u2 = unpackHalf2x16(texel1.y), u3 = unpackHalf2x16(texel1.z);
+    mat3 Vrk = mat3(u1.x, u1.y, u2.x, u1.y, u2.y, u3.x, u2.x, u3.x, u3.y);  // 3D covariance matrix
+
+    // Unpack 4 uint8 values from 32-bit integer RGBA
+    vec4 color = vec4(
+        float((texel2.x >> 0) & 0xffu) / 255.0,
+        float((texel2.x >> 8) & 0xffu) / 255.0,
+        float((texel2.x >> 16) & 0xffu) / 255.0,
+        1.0
+    );
+
+    // Spherical Beta Parameters
+    vec3 SB1Geo = uintBitsToFloat(texel3.xyz);
+    vec4 SB1Color = vec4(
+        float((texel3.x >> 0) & 0xffu) / 255.0,
+        float((texel3.x >> 8) & 0xffu) / 255.0,
+        float((texel3.x >> 16) & 0xffu) / 255.0,
+        1.0
+    );
+
+    vec3 SB2Geo = uintBitsToFloat(texel4.xyz);
+    vec4 SB2Color = vec4(
+        float((texel4.x >> 0) & 0xffu) / 255.0,
+        float((texel4.x >> 8) & 0xffu) / 255.0,
+        float((texel4.x >> 16) & 0xffu) / 255.0,
+        1.0
+    );
+
+    // ------------------------------------------------------------
+    // 2. Projective Transform and Cull
+    // ------------------------------------------------------------
+
+    // Projective Transform
+    vec4 cam = view * vec4(pos, 1);  // Transform to camera space
+    vec4 pos2d = projection * cam;   // Project to clip space
+
+    // Frustum Culling
+    float clip = 1.2 * pos2d.w;
+    if (pos2d.z < -clip || pos2d.x < -clip || pos2d.x > clip || pos2d.y < -clip || pos2d.y > clip) {
+        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);  // Place outside clip space
+        return;
+    }
 
     // STEP 3: FRUSTUM CULLING
     // Cull splats outside view frustum for performance
@@ -1002,15 +1134,9 @@ void main () {
         return;
     }
 
-    // STEP 4: FETCH 3D COVARIANCE MATRIX
-    uvec4 cov = texelFetch(u_texture, ivec2(((uint(index) & 0x3ffu) << 1) | 1u, uint(index) >> 10), 0);
-    // Unpack 6 covariance values from 3×32-bit integers
-    vec2 u1 = unpackHalf2x16(cov.x), u2 = unpackHalf2x16(cov.y), u3 = unpackHalf2x16(cov.z);
-    mat3 Vrk = mat3(u1.x, u1.y, u2.x, u1.y, u2.y, u3.x, u2.x, u3.x, u3.y);  // 3D covariance matrix
-
-    // STEP 5: PROJECT 3D COVARIANCE TO 2D SCREEN SPACE
-    // This is the core mathematical transformation for Gaussian splatting!
-    // We need to project the 3D Gaussian covariance to 2D screen covariance
+    // ------------------------------------------------------------
+    // 3. 2D Projection of Covariance Matrix
+    // ------------------------------------------------------------
     
     // Compute Jacobian of perspective projection
     mat3 J = mat3(
@@ -1039,9 +1165,27 @@ void main () {
     vec2 majorAxis = min(sqrt(2.0 * lambda1), 1024.0) * diagonalVector;        // Major axis (scaled)
     vec2 minorAxis = min(sqrt(2.0 * lambda2), 1024.0) * vec2(diagonalVector.y, -diagonalVector.x);  // Minor axis
 
+    // ------------------------------------------------------------
+    // 4. Cumpute Spherical Beta Parameters
+    // ------------------------------------------------------------
+
+    // Extract camera position from view matrix (last column of inverse view matrix)
+    vec3 viewingDirection = normalize(cameraPos - pos);
+
+    // evaluate the spherical gaussian
+    vec3 result = evaluateSphericalBeta(viewingDirection, color.rgb, SB1Geo, SB1Color, SB2Geo, SB2Color);
+
+    // normalize the result
+    result = normalize(result);
+
+    // ------------------------------------------------------------
+    // 5. Prepare output data
+    // ------------------------------------------------------------
+
     // STEP 7: PREPARE OUTPUT DATA
     // Depth-based alpha blending weight + color from texture
-    vColor = clamp(pos2d.z/pos2d.w+1.0, 0.0, 1.0) * vec4((cov.w) & 0xffu, (cov.w >> 8) & 0xffu, (cov.w >> 16) & 0xffu, (cov.w >> 24) & 0xffu) / 255.0;
+    vColor = clamp(pos2d.z/pos2d.w+1.0, 0.0, 1.0) * vec4(result, 1.0);
+    vBeta = beta;
     vPosition = position;  // Pass quad position for Gaussian evaluation
 
     // STEP 8: GENERATE QUAD VERTEX
@@ -1077,6 +1221,7 @@ precision highp float;
 // INPUTS: From vertex shader
 in vec4 vColor;     // Splat color (RGB) + depth weight (A) 
 in vec2 vPosition;  // Position within quad [-2,-2] to [2,2]
+in float vBeta;    // Beta parameter
 
 // OUTPUT: Final pixel color
 out vec4 fragColor;
@@ -1088,15 +1233,17 @@ void main () {
     float A = -dot(vPosition, vPosition);
     
     // STEP 2: GAUSSIAN CUTOFF
-    // Discard pixels beyond 2σ (where exp(-4) ≈ 0.018)
+    // Discard pixels beyond 1
     // This prevents rendering pixels with negligible contribution
-    if (A < -4.0) discard;
+    if (A < -1.0) discard;
+
+    float betaVal = 4 * exp(vBeta);
     
     // STEP 3: GAUSSIAN EVALUATION  
     // THIS IS THE CORE GAUSSIAN KERNEL EVALUATION!
     // B = exp(A) * α where A = -||x||² in ellipse space
-    float B = exp(A) * vColor.a;
-    
+    float B = pow(1.0 - A, betaVal);
+
     // STEP 4: VOLUMETRIC RENDERING OUTPUT
     // THIS IS WHERE VOLUMETRIC/SPLATTING RENDERING HAPPENS!
     // Output premultiplied alpha for proper blending:
@@ -1108,7 +1255,6 @@ void main () {
     // final_alpha = (1-dst_alpha)*src_alpha + dst_alpha
     fragColor = vec4(B * vColor.rgb, B);
 }
-
 `.trim();
 
 let defaultViewMatrix = [
