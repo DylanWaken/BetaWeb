@@ -1284,25 +1284,30 @@ async function main() {
     } catch (err) {}
     
     // SPLAT DATA LOADING SETUP
-    // Determine data source URL (from URL parameter or default)
-    const url = new URL(
-        params.get("url") || "train.splat",
-        "https://huggingface.co/cakewalk/splat-data/resolve/main/",
-    );
+    // Only load data if URL parameter is provided
+    let splatData = new Uint8Array(0);
+    let reader = null;
+    let req = null;
     
-    // Fetch splat data with streaming support
-    const req = await fetch(url, {
-        mode: "cors",
-        credentials: "omit",
-    });
-    console.log(req);
-    if (req.status != 200)
-        throw new Error(req.status + " Unable to load " + req.url);
+    const urlParam = params.get("url");
+    if (urlParam) {
+        const url = new URL(urlParam, window.location.origin);
+        
+        // Fetch splat data with streaming support
+        req = await fetch(url, {
+            mode: "cors",
+            credentials: "omit",
+        });
+        console.log(req);
+        if (req.status != 200)
+            throw new Error(req.status + " Unable to load " + req.url);
+        
+        reader = req.body.getReader();
+        splatData = new Uint8Array(req.headers.get("content-length"));
+    }
 
     // RENDERING PARAMETERS
     const rowLength = 3 * 4 + 3 * 4 + 4 + 4;  // 32 bytes per splat
-    const reader = req.body.getReader();
-    let splatData = new Uint8Array(req.headers.get("content-length"));
 
     // Adaptive downsampling based on dataset size and device capability
     const downsample =
@@ -2008,36 +2013,39 @@ async function main() {
         selectFile(e.dataTransfer.files[0]);
     });
 
-    let bytesRead = 0;
-    let lastVertexCount = -1;
-    let stopLoading = false;
+    // Only attempt to load data if we have a reader (URL was provided)
+    if (reader) {
+        let bytesRead = 0;
+        let lastVertexCount = -1;
+        let stopLoading = false;
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done || stopLoading) break;
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done || stopLoading) break;
 
-        splatData.set(value, bytesRead);
-        bytesRead += value.length;
+            splatData.set(value, bytesRead);
+            bytesRead += value.length;
 
-        if (vertexCount > lastVertexCount) {
-            if (!isPly(splatData)) {
+            if (vertexCount > lastVertexCount) {
+                if (!isPly(splatData)) {
+                    worker.postMessage({
+                        buffer: splatData.buffer,
+                        vertexCount: Math.floor(bytesRead / rowLength),
+                    });
+                }
+                lastVertexCount = vertexCount;
+            }
+        }
+        if (!stopLoading) {
+            if (isPly(splatData)) {
+                // ply file magic header means it should be handled differently
+                worker.postMessage({ ply: splatData.buffer, save: false });
+            } else {
                 worker.postMessage({
                     buffer: splatData.buffer,
                     vertexCount: Math.floor(bytesRead / rowLength),
                 });
             }
-            lastVertexCount = vertexCount;
-        }
-    }
-    if (!stopLoading) {
-        if (isPly(splatData)) {
-            // ply file magic header means it should be handled differently
-            worker.postMessage({ ply: splatData.buffer, save: false });
-        } else {
-            worker.postMessage({
-                buffer: splatData.buffer,
-                vertexCount: Math.floor(bytesRead / rowLength),
-            });
         }
     }
 }
