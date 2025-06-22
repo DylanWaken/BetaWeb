@@ -978,6 +978,8 @@ function createWorker(self) {
 
 /*
  * VERTEX SHADER - 3D GAUSSIAN TO 2D SPLAT PROJECTION
+
+ * DO NOT EDIT THIS DIRECTLY, EDIT THE VERTEX.GLSL FILE INSTEAD AND RELOAD WITH syncshadersource.py
  * =================================================
  * This shader transforms 3D Gaussian ellipsoids into 2D screen-space ellipses.
  * 
@@ -1177,7 +1179,7 @@ void main () {
 
     // STEP 7: PREPARE OUTPUT DATA
     // Depth-based alpha blending weight + color from texture
-    vColor = clamp(pos2d.z/pos2d.w+1.0, 0.0, 1.0) * vec4(result, 1.0);
+    vColor = clamp(pos2d.z/pos2d.w+1.0, 0.0, 1.0) * vec4(result, color.a);
     vBeta = beta;
     vPosition = position;  // Pass quad position for Gaussian evaluation
 
@@ -1194,6 +1196,8 @@ void main () {
 
 /*
  * FRAGMENT SHADER - GAUSSIAN KERNEL EVALUATION & VOLUMETRIC RENDERING
+ *
+ * DO NOT EDIT THIS DIRECTLY, EDIT THE FRAGMENT.GLSL FILE INSTEAD AND RELOAD WITH syncshadersource.py
  * ==================================================================
  * THIS IS WHERE THE GAUSSIAN KERNEL IS EVALUATED AND VOLUMETRIC RENDERING HAPPENS!
  * 

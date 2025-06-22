@@ -184,7 +184,7 @@ void main () {
 
     // STEP 7: PREPARE OUTPUT DATA
     // Depth-based alpha blending weight + color from texture
-    vColor = clamp(pos2d.z/pos2d.w+1.0, 0.0, 1.0) * vec4(result, 1.0);
+    vColor = clamp(pos2d.z/pos2d.w+1.0, 0.0, 1.0) * vec4(result, color.a);
     vBeta = beta;
     vPosition = position;  // Pass quad position for Gaussian evaluation
 
