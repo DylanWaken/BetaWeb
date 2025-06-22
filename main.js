@@ -912,7 +912,7 @@ function createWorker(self) {
             }
 
             // Pack RGBA into uint32
-            baseColor[0] = (a << 24) | (b << 16) | (g << 8) | r;
+            baseColor[0] = (r << 24) | (g << 16) | (b << 8) | a;
 
             // STEP 8: PACK SPHERICAL BETA PARAMETERS
             // SB1 data: Theta, Phi, Beta, RGBA
@@ -1086,29 +1086,29 @@ void main () {
     vec2 u1 = unpackHalf2x16(texel1.x), u2 = unpackHalf2x16(texel1.y), u3 = unpackHalf2x16(texel1.z);
     mat3 Vrk = mat3(u1.x, u1.y, u2.x, u1.y, u2.y, u3.x, u2.x, u3.x, u3.y);  // 3D covariance matrix
 
-    // Unpack base color from texel1
+    // Unpack base color from texel1 (R,G,B,A)
     vec4 color = vec4(
-        float((texel1.w >> 0) & 0xffu) / 255.0,
-        float((texel1.w >> 8) & 0xffu) / 255.0,
+        float((texel1.w >> 24) & 0xffu) / 255.0,
         float((texel1.w >> 16) & 0xffu) / 255.0,
-        float((texel1.w >> 24) & 0xffu) / 255.0
+        float((texel1.w >> 8) & 0xffu) / 255.0,
+        float((texel1.w >> 0) & 0xffu) / 255.0
     );
 
     // Spherical Beta Parameters from texel2 and texel3
     vec3 SB1Geo = uintBitsToFloat(texel2.xyz);
     vec4 SB1Color = vec4(
-        float((texel2.w >> 0) & 0xffu) / 255.0,
-        float((texel2.w >> 8) & 0xffu) / 255.0,
+        float((texel2.w >> 24) & 0xffu) / 255.0,
         float((texel2.w >> 16) & 0xffu) / 255.0,
-        float((texel2.w >> 24) & 0xffu) / 255.0
+        float((texel2.w >> 8) & 0xffu) / 255.0,
+        float((texel2.w >> 0) & 0xffu) / 255.0
     );
 
     vec3 SB2Geo = uintBitsToFloat(texel3.xyz);
     vec4 SB2Color = vec4(
-        float((texel3.w >> 0) & 0xffu) / 255.0,
-        float((texel3.w >> 8) & 0xffu) / 255.0,
+        float((texel3.w >> 24) & 0xffu) / 255.0,
         float((texel3.w >> 16) & 0xffu) / 255.0,
-        float((texel3.w >> 24) & 0xffu) / 255.0
+        float((texel3.w >> 8) & 0xffu) / 255.0,
+        float((texel3.w >> 0) & 0xffu) / 255.0
     );
 
     // ------------------------------------------------------------
@@ -1166,7 +1166,8 @@ void main () {
     vec3 viewingDirection = normalize(cameraPos - pos);
 
     // evaluate the spherical gaussian
-    vec3 result = evaluateSphericalBeta(viewingDirection, color.rgb, SB1Geo, SB1Color, SB2Geo, SB2Color);
+    // vec3 result = evaluateSphericalBeta(viewingDirection, color.rgb, SB1Geo, SB1Color, SB2Geo, SB2Color);
+    vec3 result = color.rgb;
 
     // normalize the result
     result = normalize(result);
@@ -1220,22 +1221,21 @@ in float vBeta;    // Beta parameter
 out vec4 fragColor;
 
 void main () {
-    // STEP 1: EVALUATE GAUSSIAN KERNEL
+    // STEP 1: EVALUATE BETA  KERNEL
     // Calculate squared distance from splat center in ellipse space
     // vPosition is in normalized ellipse coordinates where the ellipse has unit scale
-    float A = -dot(vPosition, vPosition);
+    float A = dot(vPosition, vPosition);
     
-    // STEP 2: GAUSSIAN CUTOFF
     // Discard pixels beyond 1
     // This prevents rendering pixels with negligible contribution
-    if (A < -1.0) discard;
+    if (A > 1.0) discard;
 
     float betaVal = 4.0 * exp(vBeta);
     
-    // STEP 3: GAUSSIAN EVALUATION  
-    // THIS IS THE CORE GAUSSIAN KERNEL EVALUATION!
-    // B = exp(A) * α where A = -||x||² in ellipse space
-    float B = pow(1.0 - A, betaVal);
+    // STEP 3: BETA EVALUATION  
+    // THIS IS THE CORE BETA KERNEL EVALUATION!
+    // B = pow(1.0 - A, betaVal) * α where A = -||x||² in ellipse space
+    float B = pow(1.0 - A, betaVal) * vColor.a;
 
     // STEP 4: VOLUMETRIC RENDERING OUTPUT
     // THIS IS WHERE VOLUMETRIC/SPLATTING RENDERING HAPPENS!

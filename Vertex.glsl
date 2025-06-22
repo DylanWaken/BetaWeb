@@ -53,11 +53,11 @@ vec3 evaluateSphericalBeta(vec3 dir, vec3 baseColor, vec3 SB1Geo, vec4 SB1Color,
     
     // Convert spherical coordinates to cartesian for first spherical gaussian
     vec3 meanDir1 = sphericalToCartesian(SB1Geo.x, SB1Geo.y);
-    result += computeSphericalGaussian(dir, meanDir1, SB1Geo.z, SB1Color.rgb);
+    result += computeSphericalBeta(dir, meanDir1, SB1Geo.z, SB1Color.rgb);
     
     // Convert spherical coordinates to cartesian for second spherical gaussian
     vec3 meanDir2 = sphericalToCartesian(SB2Geo.x, SB2Geo.y);
-    result += computeSphericalGaussian(dir, meanDir2, SB2Geo.z, SB2Color.rgb);
+    result += computeSphericalBeta(dir, meanDir2, SB2Geo.z, SB2Color.rgb);
     
     return result;
 }
@@ -92,29 +92,29 @@ void main () {
     vec2 u1 = unpackHalf2x16(texel1.x), u2 = unpackHalf2x16(texel1.y), u3 = unpackHalf2x16(texel1.z);
     mat3 Vrk = mat3(u1.x, u1.y, u2.x, u1.y, u2.y, u3.x, u2.x, u3.x, u3.y);  // 3D covariance matrix
 
-    // Unpack 4 uint8 values from 32-bit integer RGBA
+    // Unpack base color from texel1 (R,G,B,A)
     vec4 color = vec4(
-        float((texel2.x >> 0) & 0xffu) / 255.0,
-        float((texel2.x >> 8) & 0xffu) / 255.0,
-        float((texel2.x >> 16) & 0xffu) / 255.0,
-        1.0
+        float((texel1.w >> 24) & 0xffu) / 255.0,
+        float((texel1.w >> 16) & 0xffu) / 255.0,
+        float((texel1.w >> 8) & 0xffu) / 255.0,
+        float((texel1.w >> 0) & 0xffu) / 255.0
     );
 
-    // Spherical Beta Parameters
-    vec3 SB1Geo = uintBitsToFloat(texel3.xyz);
+    // Spherical Beta Parameters from texel2 and texel3
+    vec3 SB1Geo = uintBitsToFloat(texel2.xyz);
     vec4 SB1Color = vec4(
-        float((texel3.x >> 0) & 0xffu) / 255.0,
-        float((texel3.x >> 8) & 0xffu) / 255.0,
-        float((texel3.x >> 16) & 0xffu) / 255.0,
-        1.0
+        float((texel2.w >> 24) & 0xffu) / 255.0,
+        float((texel2.w >> 16) & 0xffu) / 255.0,
+        float((texel2.w >> 8) & 0xffu) / 255.0,
+        float((texel2.w >> 0) & 0xffu) / 255.0
     );
 
-    vec3 SB2Geo = uintBitsToFloat(texel4.xyz);
+    vec3 SB2Geo = uintBitsToFloat(texel3.xyz);
     vec4 SB2Color = vec4(
-        float((texel4.x >> 0) & 0xffu) / 255.0,
-        float((texel4.x >> 8) & 0xffu) / 255.0,
-        float((texel4.x >> 16) & 0xffu) / 255.0,
-        1.0
+        float((texel3.w >> 24) & 0xffu) / 255.0,
+        float((texel3.w >> 16) & 0xffu) / 255.0,
+        float((texel3.w >> 8) & 0xffu) / 255.0,
+        float((texel3.w >> 0) & 0xffu) / 255.0
     );
 
     // ------------------------------------------------------------
@@ -124,13 +124,6 @@ void main () {
     // Projective Transform
     vec4 cam = view * vec4(pos, 1);  // Transform to camera space
     vec4 pos2d = projection * cam;   // Project to clip space
-
-    // Frustum Culling
-    float clip = 1.2 * pos2d.w;
-    if (pos2d.z < -clip || pos2d.x < -clip || pos2d.x > clip || pos2d.y < -clip || pos2d.y > clip) {
-        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);  // Place outside clip space
-        return;
-    }
 
     // STEP 3: FRUSTUM CULLING
     // Cull splats outside view frustum for performance
@@ -179,7 +172,8 @@ void main () {
     vec3 viewingDirection = normalize(cameraPos - pos);
 
     // evaluate the spherical gaussian
-    vec3 result = evaluateSphericalBeta(viewingDirection, color.rgb, SB1Geo, SB1Color, SB2Geo, SB2Color);
+    // vec3 result = evaluateSphericalBeta(viewingDirection, color.rgb, SB1Geo, SB1Color, SB2Geo, SB2Color);
+    vec3 result = color.rgb;
 
     // normalize the result
     result = normalize(result);

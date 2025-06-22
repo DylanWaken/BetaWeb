@@ -10,22 +10,21 @@ in float vBeta;    // Beta parameter
 out vec4 fragColor;
 
 void main () {
-    // STEP 1: EVALUATE GAUSSIAN KERNEL
+    // STEP 1: EVALUATE BETA  KERNEL
     // Calculate squared distance from splat center in ellipse space
     // vPosition is in normalized ellipse coordinates where the ellipse has unit scale
-    float A = -dot(vPosition, vPosition);
+    float A = dot(vPosition, vPosition);
     
-    // STEP 2: GAUSSIAN CUTOFF
     // Discard pixels beyond 1
     // This prevents rendering pixels with negligible contribution
-    if (A < -1.0) discard;
+    if (A > 1.0) discard;
 
-    float betaVal = 4 * exp(vBeta);
+    float betaVal = 4.0 * exp(vBeta);
     
-    // STEP 3: GAUSSIAN EVALUATION  
-    // THIS IS THE CORE GAUSSIAN KERNEL EVALUATION!
-    // B = exp(A) * α where A = -||x||² in ellipse space
-    float B = pow(1.0 - A, betaVal);
+    // STEP 3: BETA EVALUATION  
+    // THIS IS THE CORE BETA KERNEL EVALUATION!
+    // B = pow(1.0 - A, betaVal) * α where A = -||x||² in ellipse space
+    float B = pow(1.0 - A, betaVal) * vColor.a;
 
     // STEP 4: VOLUMETRIC RENDERING OUTPUT
     // THIS IS WHERE VOLUMETRIC/SPLATTING RENDERING HAPPENS!
