@@ -600,10 +600,10 @@ function createWorker(self) {
             texdata[TOTAL_SIZE * i + 6] = packHalf2x16(4 * sigma[4], 4 * sigma[5]);  // σ12, σ22
 
             // RGBA Color (uint8 × 4)
-            texdata_c[(TOTAL_SIZE * i + 7) * 4 + 0] = u_buffer[(IN_BUFFER_SPLAT_SIZE * i + 10) * 4 + 0];  // R
-            texdata_c[(TOTAL_SIZE * i + 7) * 4 + 1] = u_buffer[(IN_BUFFER_SPLAT_SIZE * i + 10) * 4 + 1];  // G
-            texdata_c[(TOTAL_SIZE * i + 7) * 4 + 2] = u_buffer[(IN_BUFFER_SPLAT_SIZE * i + 10) * 4 + 2];  // B
-            texdata_c[(TOTAL_SIZE * i + 7) * 4 + 3] = u_buffer[(IN_BUFFER_SPLAT_SIZE * i + 10) * 4 + 3];  // A
+            texdata_c[(TOTAL_SIZE * i + 7) * 4 + 0] = u_buffer[(IN_BUFFER_SPLAT_SIZE * i + 11) * 4 + 0];  // R
+            texdata_c[(TOTAL_SIZE * i + 7) * 4 + 1] = u_buffer[(IN_BUFFER_SPLAT_SIZE * i + 11) * 4 + 1];  // G
+            texdata_c[(TOTAL_SIZE * i + 7) * 4 + 2] = u_buffer[(IN_BUFFER_SPLAT_SIZE * i + 11) * 4 + 2];  // B
+            texdata_c[(TOTAL_SIZE * i + 7) * 4 + 3] = u_buffer[(IN_BUFFER_SPLAT_SIZE * i + 11) * 4 + 3];  // A
             
             // THIRD TEXEL: Theta, Phi, Beta Param, RGBA Color (uint8 × 4)
             texdata_f[TOTAL_SIZE * i + 8] = f_buffer[IN_BUFFER_SPLAT_SIZE * i + 12];  // Theta
@@ -991,8 +991,7 @@ function createWorker(self) {
  * - Texel (2*i, y):   Position XYZ + Color RGBA
  * - Texel (2*i+1, y): 3D Covariance matrix (6 values as 3×half2)
  */
-const vertexShaderSource = `
-#version 300 es
+const vertexShaderSource = `#version 300 es
 precision highp float;
 precision highp int;
 
@@ -1191,8 +1190,7 @@ void main () {
         + position.y * minorAxis / viewport,   // Scale by minor axis
         0.0, 1.0);
 
-}
-`.trim();
+}`.trim();
 
 /*
  * FRAGMENT SHADER - GAUSSIAN KERNEL EVALUATION & VOLUMETRIC RENDERING
@@ -1208,8 +1206,7 @@ void main () {
  * - Gaussian function: G(x) = exp(-0.5 * x^T * Σ^(-1) * x)
  * - Alpha blending: C = Σ(αᵢ * Cᵢ * Πⱼ<ᵢ(1-αⱼ))
  */
-const fragmentShaderSource = `
-#version 300 es
+const fragmentShaderSource = `#version 300 es
 precision highp float;
 
 // INPUTS: From vertex shader
@@ -1247,8 +1244,7 @@ void main () {
     // final_color = (1-dst_alpha)*src_color + dst_color
     // final_alpha = (1-dst_alpha)*src_alpha + dst_alpha
     fragColor = vec4(B * vColor.rgb, B);
-}
-`.trim();
+}`.trim();
 
 let defaultViewMatrix = [
     0.47, 0.04, 0.88, 0, -0.11, 0.99, 0.02, 0, -0.88, -0.11, 0.47, 0, 0.07,
