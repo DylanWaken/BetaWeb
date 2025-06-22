@@ -1047,11 +1047,11 @@ vec3 evaluateSphericalBeta(vec3 dir, vec3 baseColor, vec3 SB1Geo, vec4 SB1Color,
     
     // Convert spherical coordinates to cartesian for first spherical gaussian
     vec3 meanDir1 = sphericalToCartesian(SB1Geo.x, SB1Geo.y);
-    result += computeSphericalGaussian(dir, meanDir1, SB1Geo.z, SB1Color.rgb);
+    result += computeSphericalBeta(dir, meanDir1, SB1Geo.z, SB1Color.rgb);
     
     // Convert spherical coordinates to cartesian for second spherical gaussian
     vec3 meanDir2 = sphericalToCartesian(SB2Geo.x, SB2Geo.y);
-    result += computeSphericalGaussian(dir, meanDir2, SB2Geo.z, SB2Color.rgb);
+    result += computeSphericalBeta(dir, meanDir2, SB2Geo.z, SB2Color.rgb);
     
     return result;
 }
@@ -1086,29 +1086,29 @@ void main () {
     vec2 u1 = unpackHalf2x16(texel1.x), u2 = unpackHalf2x16(texel1.y), u3 = unpackHalf2x16(texel1.z);
     mat3 Vrk = mat3(u1.x, u1.y, u2.x, u1.y, u2.y, u3.x, u2.x, u3.x, u3.y);  // 3D covariance matrix
 
-    // Unpack 4 uint8 values from 32-bit integer RGBA
+    // Unpack base color from texel1
     vec4 color = vec4(
-        float((texel2.x >> 0) & 0xffu) / 255.0,
-        float((texel2.x >> 8) & 0xffu) / 255.0,
-        float((texel2.x >> 16) & 0xffu) / 255.0,
-        1.0
+        float((texel1.w >> 0) & 0xffu) / 255.0,
+        float((texel1.w >> 8) & 0xffu) / 255.0,
+        float((texel1.w >> 16) & 0xffu) / 255.0,
+        float((texel1.w >> 24) & 0xffu) / 255.0
     );
 
-    // Spherical Beta Parameters
-    vec3 SB1Geo = uintBitsToFloat(texel3.xyz);
+    // Spherical Beta Parameters from texel2 and texel3
+    vec3 SB1Geo = uintBitsToFloat(texel2.xyz);
     vec4 SB1Color = vec4(
-        float((texel3.x >> 0) & 0xffu) / 255.0,
-        float((texel3.x >> 8) & 0xffu) / 255.0,
-        float((texel3.x >> 16) & 0xffu) / 255.0,
-        1.0
+        float((texel2.w >> 0) & 0xffu) / 255.0,
+        float((texel2.w >> 8) & 0xffu) / 255.0,
+        float((texel2.w >> 16) & 0xffu) / 255.0,
+        float((texel2.w >> 24) & 0xffu) / 255.0
     );
 
-    vec3 SB2Geo = uintBitsToFloat(texel4.xyz);
+    vec3 SB2Geo = uintBitsToFloat(texel3.xyz);
     vec4 SB2Color = vec4(
-        float((texel4.x >> 0) & 0xffu) / 255.0,
-        float((texel4.x >> 8) & 0xffu) / 255.0,
-        float((texel4.x >> 16) & 0xffu) / 255.0,
-        1.0
+        float((texel3.w >> 0) & 0xffu) / 255.0,
+        float((texel3.w >> 8) & 0xffu) / 255.0,
+        float((texel3.w >> 16) & 0xffu) / 255.0,
+        float((texel3.w >> 24) & 0xffu) / 255.0
     );
 
     // ------------------------------------------------------------
@@ -1118,13 +1118,6 @@ void main () {
     // Projective Transform
     vec4 cam = view * vec4(pos, 1);  // Transform to camera space
     vec4 pos2d = projection * cam;   // Project to clip space
-
-    // Frustum Culling
-    float clip = 1.2 * pos2d.w;
-    if (pos2d.z < -clip || pos2d.x < -clip || pos2d.x > clip || pos2d.y < -clip || pos2d.y > clip) {
-        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);  // Place outside clip space
-        return;
-    }
 
     // STEP 3: FRUSTUM CULLING
     // Cull splats outside view frustum for performance
@@ -1237,7 +1230,7 @@ void main () {
     // This prevents rendering pixels with negligible contribution
     if (A < -1.0) discard;
 
-    float betaVal = 4 * exp(vBeta);
+    float betaVal = 4.0 * exp(vBeta);
     
     // STEP 3: GAUSSIAN EVALUATION  
     // THIS IS THE CORE GAUSSIAN KERNEL EVALUATION!
@@ -1307,7 +1300,7 @@ async function main() {
     }
 
     // RENDERING PARAMETERS
-    const rowLength = 3 * 4 + 3 * 4 + 4 + 4;  // 32 bytes per splat
+    const rowLength = 20 * 4;  // 80 bytes per splat (new format with spherical beta parameters)
 
     // Adaptive downsampling based on dataset size and device capability
     const downsample =
@@ -1381,6 +1374,7 @@ async function main() {
     const u_viewport = gl.getUniformLocation(program, "viewport");
     const u_focal = gl.getUniformLocation(program, "focal");
     const u_view = gl.getUniformLocation(program, "view");
+    const u_cameraPos = gl.getUniformLocation(program, "cameraPos");
 
     // SETUP VERTEX BUFFERS
     // ===================
@@ -1438,7 +1432,10 @@ async function main() {
     worker.onmessage = (e) => {
         if (e.data.buffer) {
             splatData = new Uint8Array(e.data.buffer);
+            const splatCount = Math.floor(splatData.length / rowLength);
+            
             if (e.data.save) {
+                showFileInfo(`🎉 PLY converted! Downloading ${splatCount.toLocaleString()} splats...`);
                 const blob = new Blob([splatData.buffer], {
                     type: "application/octet-stream",
                 });
@@ -1447,10 +1444,16 @@ async function main() {
                 link.href = URL.createObjectURL(blob);
                 document.body.appendChild(link);
                 link.click();
+                setTimeout(() => document.body.removeChild(link), 100);
+            } else {
+                showFileInfo(`✅ Ready! Rendering ${splatCount.toLocaleString()} splats`);
             }
         } else if (e.data.texdata) {
             const { texdata, texwidth, texheight } = e.data;
-            // console.log(texdata)
+            
+            // Store latest texture data for debugging
+            latestTexData = { texdata, texwidth, texheight };
+            
             gl.bindTexture(gl.TEXTURE_2D, texture);
             gl.texParameteri(
                 gl.TEXTURE_2D,
@@ -1488,6 +1491,114 @@ async function main() {
 
     let activeKeys = [];
     let currentCameraIndex = 0;
+    let latestTexData = null;
+
+    // Helper function to unpack half precision floats
+    function unpackHalf2x16(packed) {
+        const half1 = packed & 0xFFFF;
+        const half2 = (packed >>> 16) & 0xFFFF;
+        
+        function halfToFloat(half) {
+            const sign = (half & 0x8000) ? -1 : 1;
+            const exp = (half & 0x7C00) >> 10;
+            const frac = half & 0x03FF;
+            
+            if (exp === 0) {
+                return sign * Math.pow(2, -14) * (frac / 1024);
+            } else if (exp === 31) {
+                return frac ? NaN : sign * Infinity;
+            } else {
+                return sign * Math.pow(2, exp - 15) * (1 + frac / 1024);
+            }
+        }
+        
+        return [halfToFloat(half1), halfToFloat(half2)];
+    }
+
+    // Debug function to print first primitive data
+    function debugFirstPrimitive() {
+        if (!latestTexData) {
+            console.log("No texture data available yet");
+            return;
+        }
+        
+        const { texdata, texwidth } = latestTexData;
+        const TOTAL_SIZE = 16; // 4 texels per splat
+        
+        console.log("=== DEBUG: First Primitive Data ===");
+        
+        // Each splat occupies 4 consecutive texels horizontally
+        const primitiveIndex = 0;
+        const splatX = primitiveIndex * 4;
+        const splatY = 0;
+        
+        // Get the 4 texels for this primitive
+        const texelOffset = splatY * texwidth + splatX;
+        
+        // TEXEL 0: Position (XYZ) + Beta Parameter
+        const texel0_offset = (texelOffset + 0) * 4;
+        const texdata_f = new Float32Array(texdata.buffer);
+        const texdata_u8 = new Uint8Array(texdata.buffer);
+        
+        console.log("TEXEL 0 - Position + Beta:");
+        console.log("  Position X:", texdata_f[texel0_offset + 0]);
+        console.log("  Position Y:", texdata_f[texel0_offset + 1]);
+        console.log("  Position Z:", texdata_f[texel0_offset + 2]);
+        console.log("  Beta Parameter:", texdata_f[texel0_offset + 3]);
+        
+        // TEXEL 1: Covariance Matrix + Base Color
+        const texel1_offset = (texelOffset + 1) * 4;
+        console.log("\nTEXEL 1 - Covariance Matrix + Base Color:");
+        
+        // Unpack covariance matrix (6 values as 3 half2 pairs)
+        const cov1 = unpackHalf2x16(texdata[texel1_offset + 0]);
+        const cov2 = unpackHalf2x16(texdata[texel1_offset + 1]);
+        const cov3 = unpackHalf2x16(texdata[texel1_offset + 2]);
+        
+        console.log("  Covariance σ00:", cov1[0] / 4.0); // Divide by 4 (scale factor)
+        console.log("  Covariance σ01:", cov1[1] / 4.0);
+        console.log("  Covariance σ02:", cov2[0] / 4.0);
+        console.log("  Covariance σ11:", cov2[1] / 4.0);
+        console.log("  Covariance σ12:", cov3[0] / 4.0);
+        console.log("  Covariance σ22:", cov3[1] / 4.0);
+        
+        // Base color RGBA (uint8 × 4)
+        const baseColorOffset = (texel1_offset + 3) * 4;
+        console.log("  Base Color R:", texdata_u8[baseColorOffset + 0]);
+        console.log("  Base Color G:", texdata_u8[baseColorOffset + 1]);
+        console.log("  Base Color B:", texdata_u8[baseColorOffset + 2]);
+        console.log("  Base Color A:", texdata_u8[baseColorOffset + 3]);
+        
+        // TEXEL 2: SB1 Parameters
+        const texel2_offset = (texelOffset + 2) * 4;
+        console.log("\nTEXEL 2 - SB1 Spherical Beta Parameters:");
+        console.log("  SB1 Theta:", texdata_f[texel2_offset + 0]);
+        console.log("  SB1 Phi:", texdata_f[texel2_offset + 1]);
+        console.log("  SB1 Beta:", texdata_f[texel2_offset + 2]);
+        
+        // SB1 Color RGBA (uint8 × 4)
+        const sb1ColorOffset = (texel2_offset + 3) * 4;
+        console.log("  SB1 Color R:", texdata_u8[sb1ColorOffset + 0]);
+        console.log("  SB1 Color G:", texdata_u8[sb1ColorOffset + 1]);
+        console.log("  SB1 Color B:", texdata_u8[sb1ColorOffset + 2]);
+        console.log("  SB1 Color A:", texdata_u8[sb1ColorOffset + 3]);
+        
+        // TEXEL 3: SB2 Parameters
+        const texel3_offset = (texelOffset + 3) * 4;
+        console.log("\nTEXEL 3 - SB2 Spherical Beta Parameters:");
+        console.log("  SB2 Theta:", texdata_f[texel3_offset + 0]);
+        console.log("  SB2 Phi:", texdata_f[texel3_offset + 1]);
+        console.log("  SB2 Beta:", texdata_f[texel3_offset + 2]);
+        
+        // SB2 Color RGBA (uint8 × 4)
+        const sb2ColorOffset = (texel3_offset + 3) * 4;
+        console.log("  SB2 Color R:", texdata_u8[sb2ColorOffset + 0]);
+        console.log("  SB2 Color G:", texdata_u8[sb2ColorOffset + 1]);
+        console.log("  SB2 Color B:", texdata_u8[sb2ColorOffset + 2]);
+        console.log("  SB2 Color A:", texdata_u8[sb2ColorOffset + 3]);
+        
+        console.log("=== End Debug ===");
+    }
 
     window.addEventListener("keydown", (e) => {
         // if (document.activeElement != document.body) return;
@@ -1518,6 +1629,8 @@ async function main() {
         } else if (e.code === "KeyP") {
             carousel = true;
             camid.innerText = "";
+        } else if (e.code === "KeyO") {
+            debugFirstPrimitive();
         }
     });
     window.addEventListener("keyup", (e) => {
@@ -1927,6 +2040,12 @@ async function main() {
         if (vertexCount > 0) {
             document.getElementById("spinner").style.display = "none";
             gl.uniformMatrix4fv(u_view, false, actualViewMatrix);
+            
+            // Extract camera position from inverse view matrix
+            let invView = invert4(actualViewMatrix);
+            let cameraPos = [invView[12], invView[13], invView[14]];
+            gl.uniform3fv(u_cameraPos, cameraPos);
+            
             gl.clear(gl.COLOR_BUFFER_BIT);
             gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount);
         } else {
@@ -1956,38 +2075,68 @@ async function main() {
         splatData[2] == 121 &&
         splatData[3] == 10;
 
+    const showFileInfo = (message, isSuccess = true) => {
+        const fileInfo = document.getElementById("fileInfo");
+        fileInfo.innerText = message;
+        fileInfo.style.display = "block";
+        fileInfo.style.background = isSuccess ? "rgba(0, 150, 0, 0.9)" : "rgba(150, 0, 0, 0.9)";
+        setTimeout(() => {
+            fileInfo.style.display = "none";
+        }, 3000);
+    };
+
     const selectFile = (file) => {
         const fr = new FileReader();
+        
         if (/\.json$/i.test(file.name)) {
+            showFileInfo("Loading camera file...");
             fr.onload = () => {
-                cameras = JSON.parse(fr.result);
-                viewMatrix = getViewMatrix(cameras[0]);
-                projectionMatrix = getProjectionMatrix(
-                    camera.fx / downsample,
-                    camera.fy / downsample,
-                    canvas.width,
-                    canvas.height,
-                );
-                gl.uniformMatrix4fv(u_projection, false, projectionMatrix);
+                try {
+                    cameras = JSON.parse(fr.result);
+                    viewMatrix = getViewMatrix(cameras[0]);
+                    projectionMatrix = getProjectionMatrix(
+                        camera.fx / downsample,
+                        camera.fy / downsample,
+                        canvas.width,
+                        canvas.height,
+                    );
+                    gl.uniformMatrix4fv(u_projection, false, projectionMatrix);
 
-                console.log("Loaded Cameras");
+                    showFileInfo(`✅ Loaded ${cameras.length} camera positions`);
+                    console.log("Loaded Cameras");
+                } catch (err) {
+                    showFileInfo("❌ Failed to load camera file", false);
+                }
             };
             fr.readAsText(file);
-        } else {
+        } else if (/\.ply$/i.test(file.name)) {
+            showFileInfo("🔄 Processing PLY file...");
             stopLoading = true;
             fr.onload = () => {
                 splatData = new Uint8Array(fr.result);
-                console.log("Loaded", Math.floor(splatData.length / rowLength));
-
+                const splatCount = Math.floor(splatData.length / rowLength);
+                
                 if (isPly(splatData)) {
-                    // ply file magic header means it should be handled differently
+                    showFileInfo(`✅ Converting PLY file with ${splatCount.toLocaleString()} points...`);
                     worker.postMessage({ ply: splatData.buffer, save: true });
                 } else {
-                    worker.postMessage({
-                        buffer: splatData.buffer,
-                        vertexCount: Math.floor(splatData.length / rowLength),
-                    });
+                    showFileInfo("❌ Invalid PLY file format", false);
                 }
+            };
+            fr.readAsArrayBuffer(file);
+        } else {
+            // Handle .splat files or other formats
+            showFileInfo("Loading splat file...");
+            stopLoading = true;
+            fr.onload = () => {
+                splatData = new Uint8Array(fr.result);
+                const splatCount = Math.floor(splatData.length / rowLength);
+                
+                showFileInfo(`✅ Loaded ${splatCount.toLocaleString()} splats`);
+                worker.postMessage({
+                    buffer: splatData.buffer,
+                    vertexCount: splatCount,
+                });
             };
             fr.readAsArrayBuffer(file);
         }
@@ -2000,18 +2149,57 @@ async function main() {
         } catch (err) {}
     });
 
+    // Enhanced drag and drop with visual feedback
+    const dragOverlay = document.getElementById("dragOverlay");
+    let dragCounter = 0;
+
     const preventDefault = (e) => {
         e.preventDefault();
         e.stopPropagation();
+        // Explicitly set dropEffect to prevent browser's default download behavior
+        if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = "copy";
+        }
     };
-    document.addEventListener("dragenter", preventDefault);
-    document.addEventListener("dragover", preventDefault);
-    document.addEventListener("dragleave", preventDefault);
-    document.addEventListener("drop", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        selectFile(e.dataTransfer.files[0]);
+
+    // Prevent default drag and drop behavior on the entire document
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        document.addEventListener(eventName, preventDefault, false);
     });
+
+    // Add specific handlers with our custom logic
+    document.addEventListener("dragenter", (e) => {
+        dragCounter++;
+        if (e.dataTransfer && e.dataTransfer.types.includes("Files")) {
+            dragOverlay.classList.add("active");
+            e.dataTransfer.dropEffect = "copy";
+        }
+    }, false);
+
+    document.addEventListener("dragover", (e) => {
+        if (e.dataTransfer && e.dataTransfer.types.includes("Files")) {
+            dragOverlay.classList.add("active");
+            e.dataTransfer.dropEffect = "copy";
+        }
+    }, false);
+
+    document.addEventListener("dragleave", (e) => {
+        dragCounter--;
+        if (dragCounter === 0) {
+            dragOverlay.classList.remove("active");
+        }
+    }, false);
+
+    document.addEventListener("drop", (e) => {
+        dragCounter = 0;
+        dragOverlay.classList.remove("active");
+        
+        if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+            const file = e.dataTransfer.files[0];
+            console.log(`Dropped file: ${file.name} (${file.size} bytes)`);
+            selectFile(file);
+        }
+    }, false);
 
     // Only attempt to load data if we have a reader (URL was provided)
     if (reader) {

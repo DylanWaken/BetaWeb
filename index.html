@@ -172,12 +172,63 @@
 				touch-action: none;
 			}
 
+			/* Drag and drop styling */
+			.drag-overlay {
+				position: fixed;
+				top: 0;
+				left: 0;
+				width: 100%;
+				height: 100%;
+				background: rgba(0, 100, 255, 0.1);
+				border: 3px dashed #0064ff;
+				display: none;
+				z-index: 1000;
+				align-items: center;
+				justify-content: center;
+				pointer-events: none;
+			}
+
+			.drag-overlay.active {
+				display: flex;
+			}
+
+			.drag-message {
+				background: rgba(0, 0, 0, 0.8);
+				color: white;
+				padding: 20px;
+				border-radius: 10px;
+				font-size: 18px;
+				text-align: center;
+				font-weight: bold;
+			}
+
+			.file-info {
+				background: rgba(0, 100, 255, 0.9);
+				color: white;
+				padding: 10px;
+				border-radius: 5px;
+				position: absolute;
+				top: 50px;
+				left: 15px;
+				z-index: 101;
+				display: none;
+			}
+
 			#instructions {
 				background: rgba(0,0,0,0.6);
 				white-space: pre-wrap;
 				padding: 10px;
 				border-radius: 10px;
 				font-size: x-small;
+			}
+
+			.ply-info {
+				background: rgba(0, 150, 0, 0.8);
+				color: white;
+				padding: 5px 10px;
+				border-radius: 3px;
+				font-size: small;
+				margin-top: 5px;
 			}
 			body.nohf .nohf {
 				display: none;
@@ -192,15 +243,21 @@
 			if(location.host.includes('hf.space')) document.body.classList.add('nohf');
 		</script>
 		<div id="info">
-			<h3 class="nohf">WebGL 3D Gaussian Splat Viewer</h3>
+			<h3 class="nohf">WebGL Deformable Beta Splatting Viewer</h3>
 			<p>
 			<small class="nohf">
-				By <a href="https://twitter.com/antimatter15">Kevin Kwok</a>.
+				Based on 3DGS viewer by <a href="https://twitter.com/antimatter15">Kevin Kwok</a>.
 				Code on
 				<a href="https://github.com/antimatter15/splat">Github</a
 				>.
+				Modified by <a href="https://github.com/DylanWaken">Dylan Sun</a>.
+				New Codebase On <a href="https://github.com/DylanWaken/BetaWeb">Github</a>.
 			</small>
 		</p>
+
+			<div class="ply-info">
+				📁 Drag & drop PLY files to view them instantly!
+			</div>
 
 			<details>
 			<summary>Use mouse or arrow keys to navigate.</summary>
@@ -235,17 +292,33 @@ touch (mobile)
 gamepad
 - if you have a game controller connected it should work
 
+files
+- drag and drop .ply files to convert and view
+- drag and drop .splat files to view directly  
+- drag and drop cameras.json to load camera positions
+
 other
 - press 0-9 to switch to one of the pre-loaded camera views
 - press '-' or '+'key to cycle loaded cameras
 - press p to resume default animation
-- drag and drop .ply file to convert to .splat
-- drag and drop cameras.json to load cameras
 </div>
 
 		</details>
 			
 		</div>
+
+		<!-- Drag and drop overlay -->
+		<div class="drag-overlay" id="dragOverlay">
+			<div class="drag-message">
+				<div>Drop your PLY or SPLAT file here</div>
+				<div style="font-size: 14px; margin-top: 10px; opacity: 0.8;">
+					PLY files will be converted to SPLAT format automatically
+				</div>
+			</div>
+		</div>
+
+		<!-- File processing info -->
+		<div class="file-info" id="fileInfo"></div>
 
 		<div id="progress"></div>
 
